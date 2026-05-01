@@ -1,5 +1,5 @@
 import re
-from urllib.parse import urlparse, urljoin, urldefrag
+from urllib.parse import urlparse, urljoin, urldefrag, parse_qs
 from bs4 import BeautifulSoup
 from collections import Counter
 
@@ -190,6 +190,12 @@ def is_valid(url):
         # excess query params: legitimate pages rarely need more than 5;
         # beyond that it's usually a dynamically-generated page explosion
         if parsed.query and len(parsed.query.split("&")) > MAX_QUERY_PARAMS:
+            return False
+
+        # block query params that generate duplicate or binary content (e.g. trac wikis)
+        # parse_qs splits "version=1&action=diff" into {"version": [...], "action": [...]}
+        blocked_params = {"version", "action", "format", "do", "rev", "diff"}
+        if blocked_params & parse_qs(parsed.query).keys():
             return False
 
         # file extension filter: skip binary/media/document files — no text to index
