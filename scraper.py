@@ -221,6 +221,12 @@ def is_valid(url):
         if re.search(r"/(calendar|cal)/", parsed.path, re.IGNORECASE):
             return False
 
+        # day-view calendar trap: WordPress Events Calendar generates /day/YYYY-MM-DD,
+        # /month/YYYY-MM, etc. — one URL per day/month counting back through history.
+        # also catches generic date-stamped paths like /talks/day/2021-01-13.
+        if re.search(r"/(day|month|week)/\d{4}-\d{2}", parsed.path):
+            return False
+
         # file extension filter: skip binary/media/document files — no text to index
         # re.match checks from the start of the string; $ anchors to the end of the path
         return not re.match(
