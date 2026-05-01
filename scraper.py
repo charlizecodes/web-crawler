@@ -194,8 +194,19 @@ def is_valid(url):
 
         # block query params that generate duplicate or binary content (e.g. trac wikis)
         # parse_qs splits "version=1&action=diff" into {"version": [...], "action": [...]}
-        blocked_params = {"version", "action", "format", "do", "rev", "diff"}
+        # "precision" covers timeline?from=...&precision=second trap
+        blocked_params = {"version", "action", "format", "do", "rev", "diff", "precision"}
         if blocked_params & parse_qs(parsed.query).keys():
+            return False
+
+        # block trac attachment paths — these serve raw binary files (zip, war, svg, etc.)
+        # the extension filter below misses them because the path ends in a wiki slug, not a file ext
+        if re.search(r"/(zip|raw)-attachment/", parsed.path):
+            return False
+
+        # block trac timeline — even without query params it's a low-info navigation page,
+        # and with any query it generates a unique url per timestamp
+        if re.search(r"/timeline", parsed.path):
             return False
 
         # file extension filter: skip binary/media/document files — no text to index
@@ -208,7 +219,7 @@ def is_valid(url):
             + r"|data|dat|exe|bz2|tar|msi|bin|7z|psd|dmg|iso"
             + r"|epub|dll|cnf|tgz|sha1"
             + r"|thmx|mso|arff|rtf|jar|csv"
-            + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$", parsed.path.lower())
+            + r"|rm|smil|wmv|swf|wma|zip|rar|gz|war|svg)$", parsed.path.lower())
 
     except TypeError:
         print("TypeError for ", parsed)
