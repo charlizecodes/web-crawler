@@ -194,7 +194,12 @@ def is_valid(url):
         # parse_qs splits "version=1&action=diff" into {"version": [...], "action": [...]}
         # "precision" covers timeline?from=...&precision=second trap
         # "format"/"do" removed — too many legitimate pages use these params
-        blocked_params = {"version", "action", "rev", "diff", "precision"}
+        # tribe-bar-date/ical/outlook-ical/eventDisplay: WordPress "The Events Calendar" plugin trap
+        #   — tribe-bar-date increments one day at a time, ical/outlook-ical add format variants
+        blocked_params = {
+            "version", "action", "rev", "diff", "precision",
+            "tribe-bar-date", "ical", "outlook-ical", "eventDisplay",
+        }
         if blocked_params & parse_qs(parsed.query).keys():
             return False
 
