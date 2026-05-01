@@ -210,6 +210,13 @@ def is_valid(url):
         # if re.search(r"/(login|logout|auth)", parsed.path):
         #     return False
 
+        # calendar trap: paths like /calendar/2024/04/ or /events/2024-04 generate
+        # infinite unique urls as the crawler follows next/prev month links
+        if re.search(r"/(calendar|cal|events?)/", parsed.path, re.IGNORECASE):
+            return False
+        if re.search(r"/\d{4}/\d{1,2}(/\d{1,2})?/?$", parsed.path):
+            return False
+
         # file extension filter: skip binary/media/document files — no text to index
         # re.match checks from the start of the string; $ anchors to the end of the path
         return not re.match(
