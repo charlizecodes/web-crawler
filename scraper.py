@@ -34,7 +34,7 @@ STOP_WORDS = {
 
 # tuning constants — adjust these during the test period if the crawler misbehaves
 MAX_CONTENT_SIZE = 1_000_000  # 1 mb: skip parsing pages larger than this to avoid memory spikes
-MIN_WORD_COUNT   = 200        # pages with fewer words are considered low-information; don't follow their links
+MIN_WORD_COUNT   = 75         # pages with fewer words are considered low-information; don't follow their links
 MAX_URL_DEPTH    = 10         # more than 10 path segments is a strong signal of a url trap
 MAX_QUERY_PARAMS = 5          # more than 5 query params often means a dynamically-generated trap page
 
@@ -193,7 +193,8 @@ def is_valid(url):
         # block query params that generate duplicate or binary content (e.g. trac wikis)
         # parse_qs splits "version=1&action=diff" into {"version": [...], "action": [...]}
         # "precision" covers timeline?from=...&precision=second trap
-        blocked_params = {"version", "action", "format", "do", "rev", "diff", "precision"}
+        # "format"/"do" removed — too many legitimate pages use these params
+        blocked_params = {"version", "action", "rev", "diff", "precision"}
         if blocked_params & parse_qs(parsed.query).keys():
             return False
 
@@ -210,11 +211,9 @@ def is_valid(url):
         # if re.search(r"/(login|logout|auth)", parsed.path):
         #     return False
 
-        # calendar trap: paths like /calendar/2024/04/ or /events/2024-04 generate
-        # infinite unique urls as the crawler follows next/prev month links
-        if re.search(r"/(calendar|cal|events?)/", parsed.path, re.IGNORECASE):
-            return False
-        if re.search(r"/\d{4}/\d{1,2}(/\d{1,2})?/?$", parsed.path):
+        # calendar trap: /calendar/ and /cal/ generate infinite next/prev-month navigation urls.
+        # /events/ is intentionally excluded — seminar and event listing pages are legitimate content.
+        if re.search(r"/(calendar|cal)/", parsed.path, re.IGNORECASE):
             return False
 
         # file extension filter: skip binary/media/document files — no text to index
@@ -228,7 +227,8 @@ def is_valid(url):
             + r"|epub|dll|cnf|tgz|sha1"
             + r"|thmx|mso|arff|rtf|jar|csv"
             + r"|rm|smil|wmv|swf|wma|zip|rar|gz|war|svg"
-            + r"|sql|php|json|xml|java|sh)$", parsed.path.lower())
+            + r"|sql|php|json|xml|java|sh"
+            + r"|ppsx|ppt|pptx|pdf|mpg|jpg|jpeg|gif|png|mp4|zip|tar|gz|rar|exe)$", parsed.path.lower())
 
     except TypeError:
         print("TypeError for ", parsed)
