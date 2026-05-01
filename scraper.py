@@ -207,8 +207,8 @@ def is_valid(url):
         if re.search(r"/timeline", parsed.path):
             return False
 
-        if re.search(r"/(login|logout|auth)", parsed.path):
-            return False
+        # if re.search(r"/(login|logout|auth)", parsed.path):
+        #     return False
 
         # file extension filter: skip binary/media/document files — no text to index
         # re.match checks from the start of the string; $ anchors to the end of the path
@@ -221,7 +221,7 @@ def is_valid(url):
             + r"|epub|dll|cnf|tgz|sha1"
             + r"|thmx|mso|arff|rtf|jar|csv"
             + r"|rm|smil|wmv|swf|wma|zip|rar|gz|war|svg)$"
-            + r"|sql|php|json|xml|war|svg|java|sh)$", parsed.path.lower())
+            + r"|sql|php|json|xml|java|sh)$", parsed.path.lower())
 
     except TypeError:
         print("TypeError for ", parsed)
