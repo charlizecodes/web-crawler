@@ -3,17 +3,17 @@ from urllib.parse import urlparse, urljoin, urldefrag, parse_qs
 from bs4 import BeautifulSoup
 from collections import Counter
 
-# --- global state for report ---
-# a set gives O(1) lookup, so checking "have i seen this url?" is fast
-unique_urls = set()
+
+# O(1) efficient lookup to check if we've already processed a url with a set
+unique_urls = set() 
 page_counter = 0
 stats = {
-    "longest_page": ["", 0],   # [url, word_count]
-    "word_freq": Counter(),     # counter maps word -> total occurrences across all pages
-    "subdomains": Counter()     # subdomain hostname -> unique page count
+    "longest_page": ["", 0],  # (url, word_count) 
+    "word_freq": Counter(),    
+    "subdomains": Counter()  
 }
 
-# common english words that don't carry meaning — we exclude these from word frequency
+# lifted from provided link of common English stop words
 STOP_WORDS = {
     "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are", "aren't",
     "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but", "by",
@@ -32,11 +32,11 @@ STOP_WORDS = {
     "would", "wouldn't", "you", "you'd", "you'll", "you're", "you've", "your", "yours", "yourself", "yourselves"
 }
 
-# tuning constants — adjust these during the test period if the crawler misbehaves
-MAX_CONTENT_SIZE = 1_000_000  # 1 mb: skip parsing pages larger than this to avoid memory spikes
-MIN_WORD_COUNT   = 75         # pages with fewer words are considered low-information; don't follow their links
-MAX_URL_DEPTH    = 10         # more than 10 path segments is a strong signal of a url trap
-MAX_QUERY_PARAMS = 5          # more than 5 query params often means a dynamically-generated trap page
+
+MAX_CONTENT_SIZE = 1_000_000  
+MIN_WORD_COUNT   = 75         # skip links with low information content
+MAX_URL_DEPTH    = 10         # >10 path segments could be a url trap
+MAX_QUERY_PARAMS = 5          # more than 5 query params often means a dynamically-generated page
 
 
 def save_report_progress():
@@ -44,105 +44,88 @@ def save_report_progress():
     with open("crawler_report_stats.txt", "w") as file:
         file.write("[CRAWLER REPORT STATS]\n\n")
 
-        file.write(f"Total Unique Pages: {len(unique_urls)}\n\n")
+        file.write(f"Total Unique URLs: {len(unique_urls)}\n\n")
         file.write(f"Longest Page: {stats['longest_page'][0]}\n")
         file.write(f"Word Count: {stats['longest_page'][1]}\n\n")
 
         file.write("Top 50 Common Words:\n")
+        count = 0
         for word, freq in stats["word_freq"].most_common(50):
-            file.write(f"{word}: {freq}\n")
+            count += 1
+            file.write(f"{count}. {word}: {freq}\n")
         file.write("\n")
 
-        # spec format: "vision.ics.uci.edu, 10"
         file.write("Subdomains Found:\n")
-        for sd in sorted(stats["subdomains"].keys()):
-            file.write(f"{sd}, {stats['subdomains'][sd]}\n")
+        # sorting alphabetically using sorted()
+        for subdomain in sorted(stats["subdomains"].keys()):
+            file.write(f"{subdomain}, {stats['subdomains'][subdomain]}\n")
 
 
-def scraper(url, resp):
-    # entry point called by the crawler framework for every fetched page.
-    # returns a list of valid urls to add to the frontier.
-    links = extract_next_links(url, resp)
-    if resp.status == 200 and resp.raw_response and resp.raw_response.content:
-        process_statistics(url, resp)
-    return [link for link in links if is_valid(link)]
-
-
-def process_statistics(url, resp):
-    # records data needed for the report. called once per unique url.
+def process_statistics(url, soup):
     global page_counter
+    # urldefrag removes fragment that jumps within the page (page content not affected)
+    defragmented_url, _ = urldefrag(url)
+    if defragmented_url in unique_urls:
+        return  # already processed
+    unique_urls.add(defragmented_url)
 
-    # urldefrag strips the fragment (#section) so http://x.com#a and http://x.com#b are the same page
-    clean_url, _ = urldefrag(url)
-    if clean_url in unique_urls:
-        return  # already processed this url — skip to avoid double-counting
-    unique_urls.add(clean_url)
-
-    # count this url toward its subdomain now, before the size check below,
-    # so large pages still appear in the subdomain report
-    parsed = urlparse(clean_url)
+    parsed = urlparse(defragmented_url)
     if parsed.netloc.endswith(".uci.edu"):
         stats["subdomains"][parsed.netloc] += 1
 
-    # pages over 1 mb are still counted as unique urls and in subdomains,
-    # but we skip their content analysis to avoid memory issues
-    if len(resp.raw_response.content) > MAX_CONTENT_SIZE:
+    # counting pages that are too big/small, etc but not processing
+    if soup is None:
         page_counter += 1
         if page_counter % 50 == 0:
             save_report_progress()
         return
 
-    # lxml is the fastest html parser available to beautifulsoup
-    soup = BeautifulSoup(resp.raw_response.content, "lxml")
-
-    # remove script/style blocks before extracting text — their source code (js, css)
-    # would otherwise be tokenized as words, inflating counts on pages like cs224
-    for tag in soup(["script", "style"]):
-        tag.decompose()
-
     # get_text() strips all html tags — word count is text-only per the spec
     text = soup.get_text()
 
-    # findall with [a-zA-Z0-9]+ tokenizes by alphanumeric runs (splits on spaces, punctuation, etc.)
-    words = re.findall(r'[a-zA-Z0-9]+', text.lower())
+    # tokenize using regex!
+    tokenized = re.findall(r'[a-zA-Z]+', text.lower())
 
-    word_count = len(words)
+    word_count = len(tokenized)
     if word_count > stats["longest_page"][1]:
-        stats["longest_page"] = [clean_url, word_count]
-
+        stats["longest_page"] = [defragmented_url, word_count]
     # filter stop words and single-character tokens before updating frequency counts
     filtered_words = [w for w in words if w not in STOP_WORDS and len(w) > 1]
-    stats["word_freq"].update(filtered_words)  # counter.update adds counts, it doesn't replace them
+    stats["word_freq"].update(filtered_words)  # counter.update adds counts
 
     page_counter += 1
     if page_counter % 50 == 0:
         save_report_progress()
 
+def scraper(url, resp):
+    # returns a list of valid urls to add to the frontier.
+    soup = None
 
-def extract_next_links(url, resp):
-    # parses the page and returns all absolute, defragmented hyperlinks found on it.
-    # returns [] (no links to follow) for error responses, oversized pages, or low-info pages.
+    # check if request succeeded and content is present before parsing 
+    if resp.status == 200 and resp.raw_response and resp.raw_response.content:
+        if len(resp.raw_response.content) <= MAX_CONTENT_SIZE:
+            soup = BeautifulSoup(resp.raw_response.content, "lxml")
+            # remove script/style blocks so their source code isn't tokenized as words
+            for tag in soup(["script", "style"]):
+                tag.decompose()
+        process_statistics(url, soup)
+    links = extract_next_links(url, soup)
+    return [link for link in links if is_valid(link)]
 
-    # non-200 status means the page didn't load properly — nothing to extract
-    if resp.status != 200 or not resp.raw_response or not resp.raw_response.content:
-        return list()
 
-    content = resp.raw_response.content
-    if len(content) > MAX_CONTENT_SIZE:
-        return list()
+
+def extract_next_links(url, soup):
+    # returns all absolute, defragmented hyperlinks found on the page.
+    # returns [] for error responses, oversized pages, or low-info pages.
+    if soup is None:
+        return []
 
     try:
-        soup = BeautifulSoup(content, "lxml")
-
-        for tag in soup(["script", "style"]):
-            tag.decompose()
-
         # low-information pages (stubs, empty calendar entries, etc.) often link to
         # hundreds of similar low-info pages — returning [] here stops the chain
-        text = soup.get_text()
-        words = re.findall(r'[a-zA-Z]+', text.lower())
+        words = re.findall(r'[a-zA-Z]+', soup.get_text().lower())
         if len(words) < MIN_WORD_COUNT:
-            return list()
+            return []
 
         extracted = []
         for link in soup.find_all('a', href=True):  # href=True skips <a> tags with no href
@@ -163,7 +146,7 @@ def extract_next_links(url, resp):
 
     except Exception as e:
         print(f"Error processing {url}: {e}")
-        return list()
+        return []
 
 
 def is_valid(url):
@@ -221,9 +204,6 @@ def is_valid(url):
         if re.search(r"/timeline", parsed.path):
             return False
 
-        # if re.search(r"/(login|logout|auth)", parsed.path):
-        #     return False
-
         # calendar trap: /calendar/ and /cal/ generate infinite next/prev-month navigation urls.
         # /events/ is intentionally excluded — seminar and event listing pages are legitimate content.
         if re.search(r"/(calendar|cal)/", parsed.path, re.IGNORECASE):
@@ -251,8 +231,7 @@ def is_valid(url):
             + r"|epub|dll|cnf|tgz|sha1"
             + r"|thmx|mso|arff|rtf|jar|csv"
             + r"|rm|smil|wmv|swf|wma|zip|rar|gz|war|svg"
-            + r"|sql|php|json|xml|java|sh"
-            + r"|ppsx|ppt|pptx|pdf|mpg|jpg|jpeg|gif|png|mp4|zip|tar|gz|rar|exe)$", parsed.path.lower())
+            + r"|sql|php|json|xml|java|sh|ppsx|mpg)$", parsed.path.lower())
 
     except TypeError:
         print("TypeError for ", parsed)
