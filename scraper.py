@@ -159,7 +159,7 @@ def extract_next_links(url, resp):
 
 
 def is_valid(url):
-    # returns true if the url should be crawled. called on every link before it enters the frontier.
+    # returns true if the url should be crawled before it enters the frontier
     try:
         parsed = urlparse(url)
 
@@ -167,8 +167,6 @@ def is_valid(url):
         if parsed.scheme not in {"http", "https"}:
             return False
 
-        # spec: only crawl *.ics.uci.edu, *.cs.uci.edu, *.informatics.uci.edu, *.stat.uci.edu
-        # using endswith("." + d) handles subdomains (www.ics.uci.edu),
         # and == d handles the bare root domain (ics.uci.edu) without the dot check falsely rejecting it
         valid_domains = ["ics.uci.edu", "cs.uci.edu", "informatics.uci.edu", "stat.uci.edu"]
         if not any(parsed.netloc == d or parsed.netloc.endswith("." + d) for d in valid_domains):
@@ -209,6 +207,9 @@ def is_valid(url):
         if re.search(r"/timeline", parsed.path):
             return False
 
+        if re.search(r"/(login|logout|auth)", parsed.path):
+            return False
+
         # file extension filter: skip binary/media/document files — no text to index
         # re.match checks from the start of the string; $ anchors to the end of the path
         return not re.match(
@@ -219,7 +220,8 @@ def is_valid(url):
             + r"|data|dat|exe|bz2|tar|msi|bin|7z|psd|dmg|iso"
             + r"|epub|dll|cnf|tgz|sha1"
             + r"|thmx|mso|arff|rtf|jar|csv"
-            + r"|rm|smil|wmv|swf|wma|zip|rar|gz|war|svg)$", parsed.path.lower())
+            + r"|rm|smil|wmv|swf|wma|zip|rar|gz|war|svg)$"
+            + r"|sql|php|json|xml|war|svg|java|sh)$", parsed.path.lower())
 
     except TypeError:
         print("TypeError for ", parsed)
