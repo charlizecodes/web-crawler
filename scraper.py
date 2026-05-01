@@ -235,6 +235,11 @@ def is_valid(url):
         if re.search(r"/(day|month|week)/\d{4}-\d{2}", parsed.path):
             return False
 
+        # date-as-path-segment trap: catches /events/2025-10-16 and similar patterns
+        # where a YYYY-MM-DD or YYYY-MM date is a standalone path segment
+        if re.search(r"/\d{4}-\d{2}-\d{2}(/|$)", parsed.path):
+            return False
+
         # file extension filter: skip binary/media/document files — no text to index
         # re.match checks from the start of the string; $ anchors to the end of the path
         return not re.match(
