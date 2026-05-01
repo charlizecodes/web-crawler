@@ -95,6 +95,11 @@ def process_statistics(url, resp):
     # lxml is the fastest html parser available to beautifulsoup
     soup = BeautifulSoup(resp.raw_response.content, "lxml")
 
+    # remove script/style blocks before extracting text — their source code (js, css)
+    # would otherwise be tokenized as words, inflating counts on pages like cs224
+    for tag in soup(["script", "style"]):
+        tag.decompose()
+
     # get_text() strips all html tags — word count is text-only per the spec
     text = soup.get_text()
 
@@ -128,6 +133,9 @@ def extract_next_links(url, resp):
 
     try:
         soup = BeautifulSoup(content, "lxml")
+
+        for tag in soup(["script", "style"]):
+            tag.decompose()
 
         # low-information pages (stubs, empty calendar entries, etc.) often link to
         # hundreds of similar low-info pages — returning [] here stops the chain
