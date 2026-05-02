@@ -80,18 +80,17 @@ def process_statistics(url, soup):
             save_report_progress()
         return
 
-    # get_text() strips all html tags — word count is text-only per the spec
-    text = soup.get_text()
+    # use body text only — soup.get_text() includes <head> content (Word XML metadata,
+    # style names, etc.) which inflates counts on pages like cs224 saved as Word HTML
+    body = soup.body or soup
+    words = re.findall(r'[a-zA-Z]+', body.get_text().lower())
 
-    # tokenize using regex!
-    tokenized = re.findall(r'[a-zA-Z]+', text.lower())
-
-    word_count = len(tokenized)
+    word_count = len(words)
     if word_count > stats["longest_page"][1]:
         stats["longest_page"] = [defragmented_url, word_count]
-    # filter stop words and single-character tokens before updating frequency counts
+
     filtered_words = [w for w in words if w not in STOP_WORDS and len(w) > 1]
-    stats["word_freq"].update(filtered_words)  # counter.update adds counts
+    stats["word_freq"].update(filtered_words)  # counter.update adds counts, doesn't replace
 
     page_counter += 1
     if page_counter % 50 == 0:
@@ -123,8 +122,8 @@ def extract_next_links(url, soup):
     try:
         # low-information pages (stubs, empty calendar entries, etc.) often link to
         # hundreds of similar low-info pages — returning [] here stops the chain
-        words = re.findall(r'[a-zA-Z]+', soup.get_text().lower())
-        if len(words) < MIN_WORD_COUNT:
+        tokenized = re.findall(r'[a-zA-Z]+', (soup.body or soup).get_text().lower())
+        if len(tokenized) < MIN_WORD_COUNT:
             return []
 
         extracted = []
