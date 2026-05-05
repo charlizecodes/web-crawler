@@ -4,16 +4,16 @@ from bs4 import BeautifulSoup
 from collections import Counter
 
 
-# O(1) efficient lookup to check if we've already processed a url with a set
+# O(1) efficient lookup using a set to check processed urls
 unique_urls = set() 
 page_counter = 0
 stats = {
     "longest_page": ["", 0],  # (url, word_count) 
-    "word_freq": Counter(),    
+    "common_words": Counter(),    
     "subdomains": Counter()  
 }
 
-# lifted from provided link of common English stop words
+# from provided link of common English stop words
 STOP_WORDS = {
     "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are", "aren't",
     "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but", "by",
@@ -32,195 +32,174 @@ STOP_WORDS = {
     "would", "wouldn't", "you", "you'd", "you'll", "you're", "you've", "your", "yours", "yourself", "yourselves"
 }
 
-
 MAX_CONTENT_SIZE = 1_000_000  
-MIN_WORD_COUNT   = 75         # skip links with low information content
-MAX_URL_DEPTH    = 10         # >10 path segments could be a url trap
-MAX_QUERY_PARAMS = 5          # more than 5 query params often means a dynamically-generated page
+MIN_WORD_COUNT   = 75         # defining low information content as word counts below 75
+MAX_URL_DEPTH    = 10         # defining >10 path segments could be a url trap
+MAX_QUERY_PARAMS = 5          # defining more than 5 query params often means a dynamically-generated page (trap)
 
 
 def save_report_progress():
     # writes current stats to disk every 50 pages so progress isn't lost if the crawler crashes
     with open("crawler_report_stats.txt", "w") as file:
-        file.write("[CRAWLER REPORT STATS]\n\n")
+        file.write("------------CS121 Crawler Report------------\n\n")
 
         file.write(f"Total Unique URLs: {len(unique_urls)}\n\n")
         file.write(f"Longest Page: {stats['longest_page'][0]}\n")
         file.write(f"Word Count: {stats['longest_page'][1]}\n\n")
 
         file.write("Top 50 Common Words:\n")
-        count = 0
-        for word, freq in stats["word_freq"].most_common(50):
-            count += 1
-            file.write(f"{count}. {word}: {freq}\n")
+        common_words_count = 0
+        for word, freq in stats["common_words"].most_common(50):
+            common_words_count += 1
+            file.write(f"{common_words_count}. {word}: {freq}\n")
         file.write("\n")
 
         file.write("Subdomains Found:\n")
-        # sorting alphabetically using sorted()
         for subdomain in sorted(stats["subdomains"].keys()):
             file.write(f"{subdomain}, {stats['subdomains'][subdomain]}\n")
 
 
-def process_statistics(url, soup):
+def process_statistics(url, words):
     global page_counter
-    # urldefrag removes fragment that jumps within the page (page content not affected)
     defragmented_url, _ = urldefrag(url)
     if defragmented_url in unique_urls:
-        return  # already processed
+        return
     unique_urls.add(defragmented_url)
 
     parsed = urlparse(defragmented_url)
     if parsed.netloc.endswith(".uci.edu"):
         stats["subdomains"][parsed.netloc] += 1
 
-    # counting pages that are too big/small, etc but not processing
-    if soup is None:
-        page_counter += 1
-        if page_counter % 50 == 0:
-            save_report_progress()
-        return
+    filtered_words = []
+    word_count = 0
+    for w in words:
+        if w == "msonormal":  # Word HTML artifact that can leak into text nodes
+            continue
+        word_count += 1
+        if w not in STOP_WORDS and len(w) > 1:
+            filtered_words.append(w)
 
-    # use body text only — soup.get_text() includes <head> content (Word XML metadata,
-    # style names, etc.) which inflates counts on pages like cs224 saved as Word HTML
-    body = soup.body or soup
-    words = re.findall(r'[a-zA-Z]+', body.get_text().lower())
-
-    word_count = len(words)
     if word_count > stats["longest_page"][1]:
         stats["longest_page"] = [defragmented_url, word_count]
 
-    filtered_words = [w for w in words if w not in STOP_WORDS and len(w) > 1]
-    stats["word_freq"].update(filtered_words)  # counter.update adds counts, doesn't replace
+    stats["common_words"].update(filtered_words)
 
     page_counter += 1
     if page_counter % 50 == 0:
         save_report_progress()
 
-def scraper(url, resp):
-    # returns a list of valid urls to add to the frontier.
-    soup = None
 
-    # check if request succeeded and content is present before parsing 
+def scraper(url, resp):
+    soup = None
+    words = []
+
     if resp.status == 200 and resp.raw_response and resp.raw_response.content:
         if len(resp.raw_response.content) <= MAX_CONTENT_SIZE:
             soup = BeautifulSoup(resp.raw_response.content, "lxml")
-            # remove script/style blocks so their source code isn't tokenized as words
             for tag in soup(["script", "style"]):
                 tag.decompose()
-        process_statistics(url, soup)
-    links = extract_next_links(url, soup)
+            # tokenize, and then pass into process_statistics and extract_next_links
+            # if lxml can't find soup.body, it returns None, so we fallback to soup to avoid an AttributeError
+            body_text = (soup.body or soup).get_text(separator=" ").lower()
+            words = re.findall(r'[a-zA-Z]+', body_text)
+        process_statistics(url, words)
+    
+
+    if soup is None:
+        return []
+    #skip link extraction for non-200 status pages or pages with no content
+    links = extract_next_links(url, soup, words)
     return [link for link in links if is_valid(link)]
 
 
-
-def extract_next_links(url, soup):
-    # returns all absolute, defragmented hyperlinks found on the page.
-    # returns [] for error responses, oversized pages, or low-info pages.
-    if soup is None:
-        return []
-
+def extract_next_links(url, soup, words):
     try:
-        # low-information pages (stubs, empty calendar entries, etc.) often link to
-        # hundreds of similar low-info pages — returning [] here stops the chain
-        tokenized = re.findall(r'[a-zA-Z]+', (soup.body or soup).get_text().lower())
-        if len(tokenized) < MIN_WORD_COUNT:
+        #links in low information pages won't be followed
+        if len(words) < MIN_WORD_COUNT:
             return []
 
         extracted = []
-        for link in soup.find_all('a', href=True):  # href=True skips <a> tags with no href
-            href = link.get('href').strip()
+        for link in soup.find_all('a', href=True): 
+            #clean up links by stripping whitespace and ignoring empty hrefs
+            href = link.get('href').strip() 
 
-            # skip non-http schemes and bare fragment links (#section)
+            # handles empty strings, javascript, email addresses, numbers, and fragment jumps within page
             if not href or href.startswith(("javascript:", "mailto:", "tel:", "#")):
                 continue
 
-            # urljoin resolves relative paths (/about -> https://ics.uci.edu/about)
+            # to join paths relative to the base url
             full_url = urljoin(url, href)
 
-            # strip fragment — http://x.com/page#section becomes http://x.com/page
+            # remove useless fragments that dont affect the content 
             clean_url, _ = urldefrag(full_url)
             extracted.append(clean_url)
 
         return extracted
 
     except Exception as e:
-        print(f"Error processing {url}: {e}")
+        print(f"Skipping {url} (parse error: {e})")
         return []
 
 
 def is_valid(url):
     # returns true if the url should be crawled before it enters the frontier
     try:
-        parsed = urlparse(url)
+        spliturl = urlparse(url) # scheme://netloc/path;parameters?query#fragment.
 
-        # the cache server rejects anything that isn't http or https (status 603)
-        if parsed.scheme not in {"http", "https"}:
+        # only http or https schemes are valid for crawling
+        if spliturl.scheme not in {"http", "https"}:
             return False
 
-        # and == d handles the bare root domain (ics.uci.edu) without the dot check falsely rejecting it
+        # domain check + subdomain ( '.' + d) check to allow subdomains of the valid domains
         valid_domains = ["ics.uci.edu", "cs.uci.edu", "informatics.uci.edu", "stat.uci.edu"]
-        if not any(parsed.netloc == d or parsed.netloc.endswith("." + d) for d in valid_domains):
+        netloc = spliturl.netloc.lower()
+        if not any(netloc == d or netloc.endswith("." + d) for d in valid_domains):
             return False
 
         # --- trap detection ---
+        path  = spliturl.path
+        query = spliturl.query
 
         # path depth: split on "/" and ignore empty strings from leading/trailing slashes
-        path_parts = [p for p in parsed.path.split("/") if p]
+        path_parts = [p for p in path.split("/") if p]
         if len(path_parts) > MAX_URL_DEPTH:
-            return False  # e.g. /a/b/c/a/b/c/a/b/c/d is almost certainly a trap
+            return False
 
-        # repeating segments: if the same folder name appears 3+ times the url is looping
-        # counter({...}) maps each segment to its count; any(...) short-circuits on first hit
+        # skippping urls if path segments repeat excessively
         segment_counts = Counter(path_parts)
         if any(count >= 3 for count in segment_counts.values()):
             return False
 
         # excess query params: legitimate pages rarely need more than 5;
         # beyond that it's usually a dynamically-generated page explosion
-        if parsed.query and len(parsed.query.split("&")) > MAX_QUERY_PARAMS:
+        if query and len(query.split("&")) > MAX_QUERY_PARAMS:
             return False
 
-        # block query params that generate duplicate or binary content (e.g. trac wikis)
-        # parse_qs splits "version=1&action=diff" into {"version": [...], "action": [...]}
-        # "precision" covers timeline?from=...&precision=second trap
-        # "format"/"do" removed — too many legitimate pages use these params
-        # tribe-bar-date/ical/outlook-ical/eventDisplay: WordPress "The Events Calendar" plugin trap
-        #   — tribe-bar-date increments one day at a time, ical/outlook-ical add format variants
+        # removing crawler traps
         blocked_params = {
             "version", "action", "rev", "diff", "precision",
             "tribe-bar-date", "ical", "outlook-ical", "eventDisplay",
         }
-        if blocked_params & parse_qs(parsed.query).keys():
+        if blocked_params & parse_qs(query).keys():
             return False
 
-        # block trac attachment paths — these serve raw binary files (zip, war, svg, etc.)
-        # the extension filter below misses them because the path ends in a wiki slug, not a file ext
-        if re.search(r"/(zip|raw)-attachment/", parsed.path):
+        # avoid zip and raw-attachment paths 
+        if re.search(r"/(zip|raw)-attachment/", path):
             return False
 
-        # block trac timeline — even without query params it's a low-info navigation page,
-        # and with any query it generates a unique url per timestamp
-        if re.search(r"/timeline", parsed.path):
+        # avoid timeline paths that generate infinite urls
+        if re.search(r"/timeline", path):
             return False
 
-        # calendar trap: /calendar/ and /cal/ generate infinite next/prev-month navigation urls.
-        # /events/ is intentionally excluded — seminar and event listing pages are legitimate content.
-        if re.search(r"/(calendar|cal)/", parsed.path, re.IGNORECASE):
+        # another common calendar trap pattern with "calendar" or "cal" in the path
+        if re.search(r"/(calendar|cal)/", path, re.IGNORECASE):
             return False
 
-        # day-view calendar trap: WordPress Events Calendar generates /day/YYYY-MM-DD,
-        # /month/YYYY-MM, etc. — one URL per day/month counting back through history.
-        # also catches generic date-stamped paths like /talks/day/2021-01-13.
-        if re.search(r"/(day|month|week)/\d{4}-\d{2}", parsed.path):
+        # 4-digit year followed by  2 digit month (and optional day) segment is not valid
+        if re.search(r"/\d{4}-\d{2}(-\d{2})?(/|$)", path):
             return False
 
-        # date-as-path-segment trap: catches /events/2025-10-16 and /events/category/.../1982-07
-        # where a YYYY-MM-DD or YYYY-MM date is a standalone path segment
-        if re.search(r"/\d{4}-\d{2}(-\d{2})?(/|$)", parsed.path):
-            return False
-
-        # file extension filter: skip binary/media/document files — no text to index
-        # re.match checks from the start of the string; $ anchors to the end of the path
+        # filter out urls that point to non-html resources based on their file extensions
         return not re.match(
             r".*\.(css|js|bmp|gif|jpe?g|ico"
             + r"|png|tiff?|mid|mp2|mp3|mp4"
@@ -230,8 +209,8 @@ def is_valid(url):
             + r"|epub|dll|cnf|tgz|sha1"
             + r"|thmx|mso|arff|rtf|jar|csv"
             + r"|rm|smil|wmv|swf|wma|zip|rar|gz|war|svg"
-            + r"|sql|php|json|xml|java|sh|ppsx|mpg)$", parsed.path.lower())
+            + r"|sql|php|json|xml|java|sh|ppsx|mpg)$", path.lower())
 
     except TypeError:
-        print("TypeError for ", parsed)
+        print("TypeError for ", spliturl)
         raise
